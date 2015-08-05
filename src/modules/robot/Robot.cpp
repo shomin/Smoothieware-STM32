@@ -27,6 +27,7 @@ using std::string;
 #include "arm_solutions/CartesianSolution.h"
 #include "arm_solutions/RotatableCartesianSolution.h"
 #include "arm_solutions/LinearDeltaSolution.h"
+#include "arm_solutions/RotatableDeltaSolution.h"
 #include "arm_solutions/HBotSolution.h"
 #include "arm_solutions/MorganSCARASolution.h"
 #include "StepTicker.h"
@@ -52,6 +53,7 @@ using std::string;
 #define  rotatable_cartesian_checksum        CHECKSUM("rotatable_cartesian")
 #define  rostock_checksum                    CHECKSUM("rostock")
 #define  linear_delta_checksum               CHECKSUM("linear_delta")
+#define  rotatable_delta_checksum            CHECKSUM("rotatable_delta")
 #define  delta_checksum                      CHECKSUM("delta")
 #define  hbot_checksum                       CHECKSUM("hbot")
 #define  corexy_checksum                     CHECKSUM("corexy")
@@ -114,6 +116,8 @@ using std::string;
 #define SPINDLE_DIRECTION_CW 0
 #define SPINDLE_DIRECTION_CCW 1
 
+#define ARC_ANGULAR_TRAVEL_EPSILON 5E-7 // Float (radians)
+
 // The Robot converts GCodes into actual movements, and then adds them to the Planner, which passes them to the Conveyor so they can be added to the queue
 // It takes care of cutting arcs into segments, same thing for line that are too long
 
@@ -162,6 +166,10 @@ void Robot::on_config_reload(void *argument)
 
     } else if(solution_checksum == rotatable_cartesian_checksum) {
         this->arm_solution = new RotatableCartesianSolution(THEKERNEL->config);
+
+    } else if(solution_checksum == rotatable_delta_checksum) {
+        this->arm_solution = new RotatableDeltaSolution(THEKERNEL->config);
+
 
     } else if(solution_checksum == morgan_checksum) {
         this->arm_solution = new MorganSCARASolution(THEKERNEL->config);
@@ -355,7 +363,8 @@ void Robot::on_gcode_received(void *argument)
                     }
                 }
                 gcode->mark_as_taken();
-            }
+            } 
+            break;
             case 17: this->select_plane(X_AXIS, Y_AXIS, Z_AXIS); gcode->mark_as_taken();  break;
             case 18: this->select_plane(X_AXIS, Z_AXIS, Y_AXIS); gcode->mark_as_taken();  break;
             case 19: this->select_plane(Y_AXIS, Z_AXIS, X_AXIS); gcode->mark_as_taken();  break;
@@ -811,13 +820,13 @@ void Robot::append_arc(Gcode *gcode, float target[], float offset[], float radiu
     float rt_axis0 = target[this->plane_axis_0] - center_axis0;
     float rt_axis1 = target[this->plane_axis_1] - center_axis1;
 
+    // Patch from GRBL Firmware - Christoph Baumann 04072015
     // CCW angle between position and target from circle center. Only one atan2() trig computation required.
-    float angular_travel = atan2(r_axis0 * rt_axis1 - r_axis1 * rt_axis0, r_axis0 * rt_axis0 + r_axis1 * rt_axis1);
-    if (angular_travel < 0) {
-        angular_travel += 2 * M_PI;
-    }
-    if (is_clockwise) {
-        angular_travel -= 2 * M_PI;
+    float angular_travel = atan2(r_axis0*rt_axis1-r_axis1*rt_axis0, r_axis0*rt_axis0+r_axis1*rt_axis1);
+    if (is_clockwise) { // Correct atan2 output per direction
+        if (angular_travel >= -ARC_ANGULAR_TRAVEL_EPSILON) { angular_travel -= 2*M_PI; }
+    } else {
+        if (angular_travel <= ARC_ANGULAR_TRAVEL_EPSILON) { angular_travel += 2*M_PI; }
     }
 
     // Find the distance for this gcode
